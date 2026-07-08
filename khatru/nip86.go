@@ -151,7 +151,8 @@ func (rl *Relay) HandleNIP86(w http.ResponseWriter, r *http.Request) {
 			// danger: this assumes the struct fields are appropriately named
 			methodName := strings.ToLower(field.Name)
 
-			if methodName == "rejectapicall" {
+			// these fields are not NIP-86 methods
+			if methodName == "onapicall" || methodName == "generic" {
 				continue
 			}
 
