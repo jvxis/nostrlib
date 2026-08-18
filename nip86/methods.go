@@ -300,6 +300,40 @@ func DecodeRequest(req Request) (MethodParams, error) {
 		}
 		roleID, _ := req.Params[1].(string)
 		return UnassignRole{pk, roleID}, nil
+	case "assignmethod":
+		if len(req.Params) < 2 {
+			return nil, fmt.Errorf("invalid number of params for '%s'", req.Method)
+		}
+		pkh, ok := req.Params[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing pubkey param for '%s'", req.Method)
+		}
+		pk, err := nostr.PubKeyFromHex(pkh)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pubkey param for '%s'", req.Method)
+		}
+		method, ok := req.Params[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing method param for '%s'", req.Method)
+		}
+		return AssignMethod{pk, method}, nil
+	case "unassignmethod":
+		if len(req.Params) < 2 {
+			return nil, fmt.Errorf("invalid number of params for '%s'", req.Method)
+		}
+		pkh, ok := req.Params[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing pubkey param for '%s'", req.Method)
+		}
+		pk, err := nostr.PubKeyFromHex(pkh)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pubkey param for '%s'", req.Method)
+		}
+		method, ok := req.Params[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing method param for '%s'", req.Method)
+		}
+		return UnassignMethod{pk, method}, nil
 	case "listclaims":
 		return ListClaims{}, nil
 	case "createclaim":
@@ -416,6 +450,8 @@ var (
 	_ MethodParams = (*DeleteRole)(nil)
 	_ MethodParams = (*AssignRole)(nil)
 	_ MethodParams = (*UnassignRole)(nil)
+	_ MethodParams = (*AssignMethod)(nil)
+	_ MethodParams = (*UnassignMethod)(nil)
 	_ MethodParams = (*ListClaims)(nil)
 	_ MethodParams = (*CreateClaim)(nil)
 	_ MethodParams = (*DeleteClaim)(nil)
@@ -598,6 +634,22 @@ type UnassignRole struct {
 }
 
 func (UnassignRole) MethodName() string { return "unassignrole" }
+
+// AssignMethod grants a pubkey permission to use a single NIP-86 method.
+type AssignMethod struct {
+	PubKey nostr.PubKey
+	Method string
+}
+
+func (AssignMethod) MethodName() string { return "assignmethod" }
+
+// UnassignMethod revokes a pubkey's permission to use a single NIP-86 method.
+type UnassignMethod struct {
+	PubKey nostr.PubKey
+	Method string
+}
+
+func (UnassignMethod) MethodName() string { return "unassignmethod" }
 
 // ListClaims lists all NIP-43 invite codes ("claims") the relay knows about.
 type ListClaims struct{}

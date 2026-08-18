@@ -48,6 +48,8 @@ type RelayManagementAPI struct {
 	DeleteRole                  func(ctx context.Context, id string) error
 	AssignRole                  func(ctx context.Context, pubkey nostr.PubKey, roleID string) error
 	UnassignRole                func(ctx context.Context, pubkey nostr.PubKey, roleID string) error
+	AssignMethod                func(ctx context.Context, pubkey nostr.PubKey, method string) error
+	UnassignMethod              func(ctx context.Context, pubkey nostr.PubKey, method string) error
 	ListClaims                  func(ctx context.Context) ([]string, error)
 	CreateClaim                 func(ctx context.Context, claim string) error
 	DeleteClaim                 func(ctx context.Context, claim string) error
@@ -376,6 +378,22 @@ func (rl *Relay) HandleNIP86(w http.ResponseWriter, r *http.Request) {
 			if rl.ManagementAPI.UnassignRole == nil {
 				resp.Error = fmt.Sprintf("method %s not supported", thing.MethodName())
 			} else if err := rl.ManagementAPI.UnassignRole(ctx, thing.PubKey, thing.RoleID); err != nil {
+				resp.Error = err.Error()
+			} else {
+				resp.Result = true
+			}
+		case nip86.AssignMethod:
+			if rl.ManagementAPI.AssignMethod == nil {
+				resp.Error = fmt.Sprintf("method %s not supported", thing.MethodName())
+			} else if err := rl.ManagementAPI.AssignMethod(ctx, thing.PubKey, thing.Method); err != nil {
+				resp.Error = err.Error()
+			} else {
+				resp.Result = true
+			}
+		case nip86.UnassignMethod:
+			if rl.ManagementAPI.UnassignMethod == nil {
+				resp.Error = fmt.Sprintf("method %s not supported", thing.MethodName())
+			} else if err := rl.ManagementAPI.UnassignMethod(ctx, thing.PubKey, thing.Method); err != nil {
 				resp.Error = err.Error()
 			} else {
 				resp.Result = true
