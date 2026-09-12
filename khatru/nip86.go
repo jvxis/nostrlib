@@ -163,6 +163,13 @@ func (rl *Relay) HandleNIP86(w http.ResponseWriter, r *http.Request) {
 				methods = append(methods, methodName)
 			}
 		}
+
+		// the reflection above answers for the relay; a relay with per-pubkey
+		// permissions narrows it to the caller, who is on the context already
+		if rl.OverwriteSupportedMethods != nil {
+			methods = rl.OverwriteSupportedMethods(ctx, methods)
+		}
+
 		resp.Result = methods
 	} else {
 		switch thing := mp.(type) {

@@ -89,6 +89,7 @@ type Relay struct {
 	OnListenerAdded           func(ws *WebSocket, ssid int, id string, filter nostr.Filter)
 	OnListenerRemoved         func(ws *WebSocket, ssid int, id string, filter nostr.Filter)
 	OverwriteRelayInformation func(ctx context.Context, r *http.Request, info nip11.RelayInformationDocument) nip11.RelayInformationDocument
+	OverwriteSupportedMethods func(ctx context.Context, methods []string) []string
 	PreventBroadcast          func(ws *WebSocket, filter nostr.Filter, event nostr.Event) bool
 
 	// this can be ignored unless you know what you're doing
