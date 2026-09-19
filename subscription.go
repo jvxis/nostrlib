@@ -92,6 +92,15 @@ func (sub *Subscription) dispatchEvent(evt Event) {
 	}
 
 	go func() {
+		// The goroutine that ends the subscription closes sub.Events while holding
+		// sub.mu, precisely so that no one sends on a closed channel. Senders have
+		// to take the same lock, or the mutex guards nothing: sub.live alone is a
+		// check, not an exclusion. Holding it across the send cannot deadlock --
+		// the closer only runs after sub.Context is done, and every send below
+		// gives up on that same signal.
+		sub.mu.Lock()
+		defer sub.mu.Unlock()
+
 		if isStored {
 			if sub.live.Load() {
 				select {
