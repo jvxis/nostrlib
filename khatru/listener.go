@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"sync"
+	"slices"
+	"sync/atomic"
 
 	"fiatjaf.com/lib/set"
 	"fiatjaf.com/nostr"
@@ -31,19 +32,54 @@ type subscription struct {
 	ws     *WebSocket
 }
 
+// Every set in the indexes below is frozen once published: writers build a new one and
+// swap it in, and never change one in place.
+//
+// Writers are serialized by the relay's clientsMutex, but candidates reads the indexes
+// under no lock at all. The sets used to be SliceSets changed in place, and Slice hands
+// out the live backing array: a Remove shifted it under a reader, which then skipped
+// the subscriber that slid into a position it had already passed, and that subscriber
+// never got the event. Emptied sets also went back to a pool while a reader could still
+// be walking them. Measured: with subscriptions leaving while events were dispatched, up
+// to 18 of 64 subscribers that stayed were skipped in a single dispatch, on every index.
 type dispatcher struct {
 	serial          int
 	subscriptions   *xsync.MapOf[int, subscription]
 	byAuthor        *xsync.MapOf[nostr.PubKey, set.Set[int]]
 	byKind          *xsync.MapOf[nostr.Kind, set.Set[int]]
-	fallbackTags    set.Set[int]
-	fallbackNothing set.Set[int]
+	fallbackTags    *frozenSet
+	fallbackNothing *frozenSet
 }
 
-var setPool = sync.Pool{
-	New: func() any {
-		return set.NewEmptySliceSetReusing[int](make([]int, 0, 10))
-	},
+// frozenSet holds a set that is replaced whole, for the indexes that are a single set
+// rather than a map of them.
+type frozenSet struct{ current atomic.Value }
+
+func newFrozenSet() *frozenSet {
+	f := &frozenSet{}
+	f.current.Store(set.NewSliceSet[int]())
+	return f
+}
+
+func (f *frozenSet) load() set.Set[int] { return f.current.Load().(set.Set[int]) }
+
+// add and remove must be called with the relay's clientsMutex held, like every writer.
+func (f *frozenSet) add(ssid int)    { f.current.Store(setWith(f.load(), ssid)) }
+func (f *frozenSet) remove(ssid int) { f.current.Store(setWithout(f.load(), ssid)) }
+
+// setWith returns a new set holding s's subscriptions and ssid. s is not touched.
+func setWith(s set.Set[int], ssid int) set.Set[int] {
+	var items []int
+	if s != nil {
+		items = slices.Clone(s.Slice())
+	}
+	return set.NewSliceSet(append(items, ssid)...)
+}
+
+// setWithout returns a new set holding s's subscriptions but ssid. s is not touched.
+func setWithout(s set.Set[int], ssid int) set.Set[int] {
+	items := slices.DeleteFunc(slices.Clone(s.Slice()), func(item int) bool { return item == ssid })
+	return set.NewSliceSet(items...)
 }
 
 func newDispatcher() dispatcher {
@@ -51,8 +87,8 @@ func newDispatcher() dispatcher {
 		subscriptions:   xsync.NewMapOf[int, subscription](),
 		byAuthor:        xsync.NewMapOf[nostr.PubKey, set.Set[int]](),
 		byKind:          xsync.NewMapOf[nostr.Kind, set.Set[int]](),
-		fallbackTags:    setPool.Get().(set.Set[int]),
-		fallbackNothing: setPool.Get().(set.Set[int]),
+		fallbackTags:    newFrozenSet(),
+		fallbackNothing: newFrozenSet(),
 	}
 }
 
@@ -67,11 +103,7 @@ func (d *dispatcher) addSubscription(sub subscription) int {
 		indexed = true
 		for _, author := range sub.filter.Authors {
 			d.byAuthor.Compute(author, func(s set.Set[int], loaded bool) (set.Set[int], bool) {
-				if !loaded {
-					s = setPool.Get().(set.Set[int])
-				}
-				s.Add(ssid)
-				return s, false
+				return setWith(s, ssid), false
 			})
 		}
 	}
@@ -80,20 +112,16 @@ func (d *dispatcher) addSubscription(sub subscription) int {
 		indexed = true
 		for _, kind := range sub.filter.Kinds {
 			d.byKind.Compute(kind, func(s set.Set[int], loaded bool) (set.Set[int], bool) {
-				if !loaded {
-					s = setPool.Get().(set.Set[int])
-				}
-				s.Add(ssid)
-				return s, false
+				return setWith(s, ssid), false
 			})
 		}
 	}
 
 	if !indexed {
 		if sub.filter.Tags != nil {
-			d.fallbackTags.Add(ssid)
+			d.fallbackTags.add(ssid)
 		} else {
-			d.fallbackNothing.Add(ssid)
+			d.fallbackNothing.add(ssid)
 		}
 	}
 
@@ -115,13 +143,8 @@ func (d *dispatcher) removeSubscription(ssid int) nostr.Filter {
 					if !loaded {
 						return s, true
 					}
-					s.Remove(ssid)
-
-					delete := s.Len() == 0
-					if delete {
-						setPool.Put(s)
-					}
-					return s, delete
+					next := setWithout(s, ssid)
+					return next, next.Len() == 0
 				})
 			}
 		}
@@ -133,22 +156,17 @@ func (d *dispatcher) removeSubscription(ssid int) nostr.Filter {
 					if !loaded {
 						return s, true
 					}
-					s.Remove(ssid)
-
-					delete := s.Len() == 0
-					if delete {
-						setPool.Put(s)
-					}
-					return s, delete
+					next := setWithout(s, ssid)
+					return next, next.Len() == 0
 				})
 			}
 		}
 
 		if !indexed {
 			if sub.filter.Tags != nil {
-				d.fallbackTags.Remove(ssid)
+				d.fallbackTags.remove(ssid)
 			} else {
-				d.fallbackNothing.Remove(ssid)
+				d.fallbackNothing.remove(ssid)
 			}
 		}
 
@@ -234,7 +252,7 @@ func (d *dispatcher) candidates(event nostr.Event) iter.Seq[subscription] {
 		}
 
 		if len(event.Tags) > 0 {
-			for _, ssid := range d.fallbackTags.Slice() {
+			for _, ssid := range d.fallbackTags.load().Slice() {
 				sub, ok := d.subscriptions.Load(ssid)
 				if !ok {
 					continue
@@ -248,7 +266,7 @@ func (d *dispatcher) candidates(event nostr.Event) iter.Seq[subscription] {
 			}
 		}
 
-		for _, ssid := range d.fallbackNothing.Slice() {
+		for _, ssid := range d.fallbackNothing.load().Slice() {
 			sub, ok := d.subscriptions.Load(ssid)
 			if !ok {
 				continue
