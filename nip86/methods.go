@@ -383,9 +383,23 @@ func DecodeRequest(req Request) (MethodParams, error) {
 	case "stats":
 		return Stats{}, nil
 	default:
-		return nil, fmt.Errorf("unknown method '%s'", req.Method)
+		// A method this package doesn't know is handed over as it came, so a relay can offer its
+		// own (khatru's ManagementAPI.Generic) and decide who may call it in OnAPICall like any
+		// other. Before, it failed here, and Generic could never be reached.
+		if req.Method == "" {
+			return nil, fmt.Errorf("missing method")
+		}
+		return Generic{Name: req.Method, Params: req.Params}, nil
 	}
 }
+
+// Generic is a method outside the NIP-86 list, with its params untouched.
+type Generic struct {
+	Name   string
+	Params []any
+}
+
+func (g Generic) MethodName() string { return g.Name }
 
 // coerceTags converts a decoded JSON value (an array of arrays of strings) into
 // nostr.Tags. A nil value yields nil tags; any other shape is an error.
@@ -421,6 +435,7 @@ type MethodParams interface {
 }
 
 var (
+	_ MethodParams = (*Generic)(nil)
 	_ MethodParams = (*SupportedMethods)(nil)
 	_ MethodParams = (*BanPubKey)(nil)
 	_ MethodParams = (*ListBannedPubKeys)(nil)
