@@ -459,7 +459,9 @@ func (rl *Relay) HandleNIP86(w http.ResponseWriter, r *http.Request) {
 			} else if result, err := rl.ManagementAPI.Generic(ctx, req); err != nil {
 				resp.Error = err.Error()
 			} else {
-				resp.Result = result
+				// Generic already answers with a whole Response; wrapping it again would nest
+				// the result one level deeper than every other method's.
+				resp = result
 			}
 		}
 	}
